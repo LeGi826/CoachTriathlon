@@ -1,0 +1,23 @@
+openapi: 3.1.0
+info:
+  title: Coach Triathlon API
+  description: API pour exposer les données d'entraînement depuis Strava.
+  version: "1.0.0"
+servers:
+  - url: https://coachtriathlon.onrender.com
+paths:
+  /weekly-stats:
+    get:
+      summary: Récupérer les statistiques hebdomadaires
+      operationId: getWeeklyStats
+      responses:
+        '200':
+          description: Données récupérées avec succès
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Voici ton résumé de la semaine."
