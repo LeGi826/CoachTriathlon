@@ -1,14 +1,19 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import os
+from typing import Optional
 
 from strava_client import (
     get_weekly_summary,
     get_weekly_details,
-    get_weekly_analysis,
 )
 
-app = FastAPI(title="CoachTriathlon API")
+app = FastAPI(
+    title="CoachTriathlon API",
+    version="1.0.0",
+    description="Endpoints d'agrégation Strava pour CoachTriathlon (hebdomadaire + cardio/récup).",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,21 +22,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------- Helpers ----------
 
-def _get_token(query_token: str | None) -> str:
+def _get_token(query_token: Optional[str]) -> str:
     """
-    Récupère le token d'accès Strava à partir de la query (?access_token=...)
-    ou depuis la variable d'env ACCESS_TOKEN. Si absent => lève une erreur explicite.
+    Récupère un access_token Strava depuis:
+    1) le paramètre d'URL ?access_token=
+    2) la variable d'environnement ACCESS_TOKEN
+    3) sinon il n'est pas requis si STRAVA_REFRESH_TOKEN est défini (rafraîchissement automatique).
     """
-    if query_token and query_token.strip():
-        return query_token.strip()
-    env_token = os.getenv("ACCESS_TOKEN", "").strip()
+    if query_token:
+        return query_token
+
+    env_token = os.getenv("ACCESS_TOKEN")
     if env_token:
         return env_token
-    raise ValueError(
-        "Missing access_token. Provide ?access_token=... or set ACCESS_TOKEN env var."
-    )
 
+    # Si pas de token direct, on laissera strava_client rafraîchir via STRAVA_REFRESH_TOKEN.
+    # On renvoie une chaîne vide pour signifier "utilise le refresh token".
+    return ""
+
+
+def _get_hr_inputs(hr_rest: Optional[float], hr_max: Optional[float]):
+    """
+    Récupère HRrest/HRmax depuis:
+    - query string si fournis
+    - sinon ENV HR_RESTING / HR_MAX
+    - sinon None (les calculs de TRIMP s'adapteront en conséquence)
+    """
+    if hr_rest is None:
+        env_rest = os.getenv("HR_RESTING")
+        if env_rest:
+            try:
+                hr_rest = float(env_rest)
+            except ValueError:
+                hr_rest = None
+    if hr_max is None:
+        env_max = os.getenv("HR_MAX")
+        if env_max:
+            try:
+                hr_max = float(env_max)
+            except ValueError:
+                hr_max = None
+    return hr_rest, hr_max
+
+
+# ---------- Endpoints ----------
 
 @app.get("/healthz")
 def healthz():
@@ -40,51 +76,43 @@ def healthz():
 
 @app.get("/weekly-stats")
 def weekly_stats(
-    access_token: str | None = Query(default=None),
-    types: str = Query(default="all", description="Liste de types séparés par des virgules (ex: Ride,Run,Swim,WeightTraining) ou 'all'"),
+    access_token: Optional[str] = Query(None, description="Token Strava (optionnel si refresh token configuré)"),
+    week_start: Optional[str] = Query(None, description="YYYY-MM-DD (lundi). Par défaut: ce lundi."),
 ):
     """
-    Retourne un résumé hebdo simple (total km, total heures, nombre de séances, décompte par type)
+    Stats hebdo compactes (tous sports) + distribution par type.
     """
     token = _get_token(access_token)
-    return get_weekly_summary(token, types=types)
+    try:
+        data = get_weekly_summary(access_token=token, week_start=week_start)
+        return JSONResponse(data)
+    except Exception as e:
+        return JSONResponse({"error": "weekly_stats_failed", "detail": str(e)}, status_code=500)
 
 
 @app.get("/weekly-details")
 def weekly_details(
-    access_token: str | None = Query(default=None),
-    types: str = Query(default="all"),
-    with_streams: bool = Query(default=False),
+    access_token: Optional[str] = Query(None, description="Token Strava (optionnel si refresh token configuré)"),
+    with_streams: bool = Query(False, description="Inclure les streams HR/vitesse (peut être lourd)"),
+    compute_decoupling: bool = Query(False, description="Calcule l'HR decoupling si streams dispo"),
+    hr_rest: Optional[float] = Query(None, description="FC repos (bpm) — sinon HR_RESTING env"),
+    hr_max: Optional[float] = Query(None, description="FC max (bpm) — sinon HR_MAX env"),
+    week_start: Optional[str] = Query(None, description="YYYY-MM-DD (lundi). Par défaut: ce lundi."),
 ):
     """
-    Détails hebdo par séance, + agrégats par sport; option pour inclure les streams (heartrate, velocity_smooth)
+    Détails complets hebdo, cardio, agrégats par sport, TRIMP, monotony/strain.
     """
     token = _get_token(access_token)
-    return get_weekly_details(token, types=types, with_streams=with_streams)
-
-
-@app.get("/weekly-analysis")
-def weekly_analysis(
-    access_token: str | None = Query(default=None),
-    types: str = Query(default="all"),
-    with_streams: bool = Query(default=True, description="Recommandé: True pour une analyse plus fine"),
-    zone_model: str = Query(default="percent_max", description="'percent_max' (par défaut) ou 'karvonen'"),
-    hrmax: int | None = Query(default=None, description="Fréquence cardiaque max connue (bpm). Si vide, estimation automatique."),
-    lthr: int | None = Query(default=None, description="Seuil lactique (bpm) — utile pour certains modèles."),
-):
-    """
-    Analyse cardio hebdomadaire :
-      - Temps passé dans 5 zones
-      - TRIMP par séance et total hebdo
-      - Intensité moyenne hebdo
-      - Estimation automatique de HRmax si non fourni
-    """
-    token = _get_token(access_token)
-    return get_weekly_analysis(
-        token,
-        types=types,
-        with_streams=with_streams,
-        zone_model=zone_model,
-        hrmax=hrmax,
-        lthr=lthr,
-    )
+    hr_rest, hr_max = _get_hr_inputs(hr_rest, hr_max)
+    try:
+        data = get_weekly_details(
+            access_token=token,
+            include_streams=with_streams,
+            compute_decoupling=compute_decoupling,
+            hr_rest=hr_rest,
+            hr_max=hr_max,
+            week_start=week_start,
+        )
+        return JSONResponse(data)
+    except Exception as e:
+        return JSONResponse({"error": "weekly_details_failed", "detail": str(e)}, status_code=500)
