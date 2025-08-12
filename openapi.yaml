@@ -1,14 +1,14 @@
 openapi: 3.1.0
 info:
   title: Coach Triathlon API
-  version: "1.3.0"
-  description: API pour exposer les données d'entraînement depuis Strava (hebdomadaire).
+  description: API pour exposer les données d'entraînement depuis Strava (hebdo).
+  version: 1.1.0
 servers:
   - url: https://coachtriathlon.onrender.com
 paths:
   /healthz:
     get:
-      summary: Vérifier l'état du service
+      summary: Status de santé
       operationId: healthz
       responses:
         "200":
@@ -21,25 +21,25 @@ paths:
                   status:
                     type: string
                     example: ok
-
   /weekly-stats:
     get:
-      summary: Résumé hebdomadaire (km/temps/sessions + compte par type)
+      summary: Statistiques hebdo (résumé)
       operationId: getWeeklyStats
       parameters:
-        - name: access_token
-          in: query
+        - in: query
+          name: access_token
           required: false
-          description: Jeton Strava (sinon ENV/refresh utilisés côté serveur)
           schema:
             type: string
-        - name: types
-          in: query
+          description: Strava OAuth access_token (sinon utilise la variable d'env ACCESS_TOKEN)
+        - in: query
+          name: types
           required: false
-          description: "tri | all | liste séparée par des virgules (ex: Ride,Run,Swim,WeightTraining)"
           schema:
             type: string
             default: tri
+          description: >
+            'tri' (Swim,Ride,Run) | 'endurance' (tri + cardio générique) | 'all' | liste CSV (ex: 'Ride,Run,Swim,Workout,WeightTraining').
       responses:
         "200":
           description: Données récupérées avec succès
@@ -48,52 +48,42 @@ paths:
               schema:
                 type: object
                 properties:
-                  total_km:
-                    type: number
-                    example: 42.2
-                  total_time_h:
-                    type: number
-                    example: 3.75
-                  sessions:
-                    type: integer
-                    example: 6
+                  total_km: { type: number, example: 42.5 }
+                  total_time_h: { type: number, example: 3.75 }
+                  sessions: { type: integer, example: 6 }
                   counts_by_type:
                     type: object
                     additionalProperties:
                       type: integer
-                    example:
-                      Ride: 3
-                      Run: 2
-                      WeightTraining: 1
-
   /weekly-details:
     get:
-      summary: Détails hebdomadaires (par sport + activités, streams optionnels)
+      summary: Détails hebdo (par sport + activités)
       operationId: getWeeklyDetails
       parameters:
-        - name: access_token
-          in: query
+        - in: query
+          name: access_token
           required: false
-          description: Jeton Strava (sinon ENV/refresh utilisés côté serveur)
           schema:
             type: string
-        - name: with_streams
-          in: query
+          description: Strava OAuth access_token (sinon utilise la variable d'env ACCESS_TOKEN)
+        - in: query
+          name: with_streams
           required: false
-          description: Ajouter les séries FC/vitesse si disponibles
           schema:
             type: boolean
             default: false
-        - name: types
-          in: query
+          description: Inclure les séries temporelles HR/vitesse si disponibles
+        - in: query
+          name: types
           required: false
-          description: "tri | all | liste séparée par des virgules (ex: Ride,Run,Swim,WeightTraining)"
           schema:
             type: string
             default: tri
+          description: >
+            'tri' | 'endurance' | 'all' | liste CSV (ex: 'Ride,Run,Swim,Workout,WeightTraining').
       responses:
         "200":
-          description: Détail des activités
+          description: Données récupérées avec succès
           content:
             application/json:
               schema:
@@ -112,8 +102,8 @@ paths:
                       properties:
                         count: { type: integer }
                         total_km: { type: number }
-                        total_time_h: { type: number }
                         elev_gain_m: { type: number }
+                        total_time_h: { type: number }
                         avg_hr: { type: number, nullable: true }
                         max_hr: { type: number, nullable: true }
                   activities:
@@ -134,17 +124,11 @@ paths:
                         avg_heartrate: { type: number, nullable: true }
                         max_heartrate: { type: number, nullable: true }
                         suffer_score: { type: number, nullable: true }
-                        trainer: { type: boolean, nullable: true }
-                        commute: { type: boolean, nullable: true }
+                        trainer: { type: boolean }
+                        commute: { type: boolean }
                         streams:
                           type: object
                           nullable: true
-                          properties:
-                            heartrate:
-                              type: array
-                              items: { type: number }
-                              nullable: true
-                            velocity_smooth_mps:
-                              type: array
-                              items: { type: number }
-                              nullable: true
+                          additionalProperties:
+                            type: array
+                            items: { type: number }
