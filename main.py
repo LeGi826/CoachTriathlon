@@ -18,20 +18,36 @@ def healthz():
     return {"status": "ok"}
 
 @app.get("/weekly-stats")
-def weekly_stats(access_token: Optional[str] = Query(default=None)):
+def weekly_stats(
+    access_token: Optional[str] = Query(default=None),
+    types: str = Query(
+        default="tri",
+        description="tri | all | liste ex: Ride,Run,Swim,WeightTraining"
+    )
+):
     """
-    Résumé hebdo simple (km, temps total, nb d'activités)
-    access_token est optionnel (refresh automatique côté serveur si absent/expiré).
+    Résumé hebdo (km, temps total, nb de sessions) + compte par sport.
+    - types='tri' (par défaut) : Ride/Run/Swim uniquement
+    - types='all' : toutes les activités Strava
+    - types='Ride,Run,...' : liste personnalisée
     """
-    return get_weekly_summary(access_token)
+    return get_weekly_summary(access_token, types=types)
 
 @app.get("/weekly-details")
 def weekly_details(
     access_token: Optional[str] = Query(default=None),
-    with_streams: bool = Query(default=False)
+    with_streams: bool = Query(default=False),
+    types: str = Query(
+        default="tri",
+        description="tri | all | liste ex: Ride,Run,Swim,WeightTraining"
+    )
 ):
     """
-    Détails hebdo : résumé, agrégats par sport (incl. cardio), liste d'activités,
-    et, si with_streams=True, séries temporelles FC/vitesse (si autorisées).
+    Détails hebdo :
+      - summary (km/temps/sessions),
+      - by_sport (incl. cardio agrégé),
+      - activities (liste complète),
+      - streams (FC/vitesse) si with_streams=True.
+    Filtrage idem au endpoint /weekly-stats via 'types'.
     """
-    return get_weekly_details(access_token, with_streams=with_streams)
+    return get_weekly_details(access_token, with_streams=with_streams, types=types)
