@@ -1,7 +1,7 @@
 import requests
 from datetime import datetime, timedelta
 
-def get_weekly_summary(access_token):
+def get_weekly_summary(access_token: str):
     today = datetime.now()
     last_monday = today - timedelta(days=today.weekday())
     after = int(last_monday.timestamp())
@@ -10,17 +10,28 @@ def get_weekly_summary(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
     params = {"after": after, "per_page": 100}
 
-    response = requests.get(url, headers=headers, params=params)
-    data = response.json()
+    resp = requests.get(url, headers=headers, params=params, timeout=20)
+    if resp.status_code != 200:
+        # Retour clair si token expiré/invalid (401/403) ou autre
+        try:
+            detail = resp.json()
+        except Exception:
+            detail = {"text": resp.text}
+        return {
+            "error": "strava_api_error",
+            "status_code": resp.status_code,
+            "detail": detail
+        }
 
-    total_distance = 0
+    activities = resp.json()
+    total_distance = 0.0
     total_duration = 0
     count = 0
 
-    for activity in data:
-        if activity["type"] in ["Ride", "Run", "Swim"]:
-            total_distance += activity["distance"]
-            total_duration += activity["moving_time"]
+    for act in activities:
+        if act.get("type") in ("Ride", "Run", "Swim"):
+            total_distance += float(act.get("distance", 0))
+            total_duration += int(act.get("moving_time", 0))
             count += 1
 
     return {
