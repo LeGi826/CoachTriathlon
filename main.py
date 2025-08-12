@@ -36,7 +36,7 @@ def weekly_stats(
 @app.get("/weekly-details")
 def weekly_details(
     access_token: Optional[str] = Query(default=None),
-    with_streams: bool = Query(default=False),
+    with_streams: bool = Query(default=False, description="Ajouter FC/vitesse si disponibles"),
     types: str = Query(
         default="tri",
         description="tri | all | liste ex: Ride,Run,Swim,WeightTraining"
@@ -48,6 +48,6 @@ def weekly_details(
       - by_sport (incl. cardio agrégé),
       - activities (liste complète),
       - streams (FC/vitesse) si with_streams=True.
-    Filtrage idem au endpoint /weekly-stats via 'types'.
+    Filtrage idem à /weekly-stats via 'types'.
     """
     return get_weekly_details(access_token, with_streams=with_streams, types=types)
