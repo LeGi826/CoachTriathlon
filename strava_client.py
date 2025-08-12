@@ -1,7 +1,7 @@
 import os
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 
 import requests
 
@@ -18,16 +18,14 @@ def _week_start_end(today: datetime) -> Tuple[int, int]:
     """
     Retourne (after_ts, before_ts) en secondes epoch pour la semaine courante (du lundi 00:00:00 au dimanche 23:59:59).
     """
-    # today en local => on reste simple: base UTC mais logique relative
-    # On part du lundi de la semaine du "today"
-    local_today = today.astimezone()  # convertit en TZ locale
+    local_today = today.astimezone()  # TZ locale
     start_of_week = (local_today - timedelta(days=local_today.weekday())).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
     end_of_week = start_of_week + timedelta(days=7) - timedelta(seconds=1)
     return int(start_of_week.timestamp()), int(end_of_week.timestamp())
 
-def _refresh_access_token_if_needed() -> str | None:
+def _refresh_access_token_if_needed() -> Optional[str]:
     """
     Si l'app utilise un flow 'server' (client_id/secret/refresh_token en env),
     régénère un access_token utilisable côté serveur. Sinon None.
@@ -53,7 +51,7 @@ def _refresh_access_token_if_needed() -> str | None:
     data = resp.json()
     token = data.get("access_token")
     if token:
-        os.environ["ACCESS_TOKEN"] = token  # on le place en mémoire de process
+        os.environ["ACCESS_TOKEN"] = token  # en mémoire de process
     return token
 
 
@@ -113,7 +111,6 @@ def _fetch_week_activities(access_token: str, types: set[str]) -> List[Dict[str,
             new_token = _refresh_access_token_if_needed()
             if new_token:
                 access_token = new_token
-                # retry
                 r = requests.get(
                     f"{STRAVA_BASE}/athlete/activities",
                     headers=_auth_headers(access_token),
@@ -148,6 +145,16 @@ def _fetch_streams(access_token: str, activity_id: int, stream_keys: List[str]) 
         params={"keys": ",".join(stream_keys), "key_by_type": "true"},
         timeout=30,
     )
+    if r.status_code == 401:
+        new_token = _refresh_access_token_if_needed()
+        if new_token:
+            access_token = new_token
+            r = requests.get(
+                f"{STRAVA_BASE}/activities/{activity_id}/streams",
+                headers=_auth_headers(access_token),
+                params={"keys": ",".join(stream_keys), "key_by_type": "true"},
+                timeout=30,
+            )
     if r.status_code == 404:
         return {}
     r.raise_for_status()
@@ -290,15 +297,14 @@ def get_weekly_details(access_token: str, types: str = "all", with_streams: bool
 
 
 # -----------------------------
-# Cardio Analysis (zones + TRIMP)
+# Cardio Analysis (zones + TRIMP + Récup + Decoupling)
 # -----------------------------
 
-def _estimate_hrmax(activities: List[Dict[str, Any]]) -> int | None:
+def _estimate_hrmax(activities: List[Dict[str, Any]]) -> Optional[int]:
     """
-    Essai d'estimation HRmax: max des max_heartrate connus sur la semaine.
-    Si aucun, retourne None.
+    Estimation HRmax: max des max_heartrate connus sur la semaine.
     """
-    mx = None
+    mx: Optional[float] = None
     for a in activities:
         v = _safe(a, "max_heartrate")
         if v is not None:
@@ -306,34 +312,29 @@ def _estimate_hrmax(activities: List[Dict[str, Any]]) -> int | None:
             mx = v if mx is None else max(mx, v)
     if mx is None:
         return None
-    # on arrondit au bpm
     return int(round(mx))
 
-
-def _zones_percent_max(hrmax: int) -> List[Tuple[str, int, int]]:
+def _zones_percent_max(hrmax: int) -> List[Tuple[str, int, Optional[int]]]:
     """
-    Zones = %HRmax (bornes inclusives inf, exclusive sup sauf Z5).
-    Z1: <60%, Z2: 60-70, Z3: 70-80, Z4: 80-90, Z5: >=90
-    Retourne une liste [(zone_label, min_bpm, max_bpm_inclus)] où max=None pour la dernière.
+    Zones = %HRmax (bornes Z1<60%, Z2 60-70, Z3 70-80, Z4 80-90, Z5 >=90)
     """
-    z = []
-    z.append(("Z1", 0, math.floor(0.60 * hrmax)))                # <60%
+    z: List[Tuple[str, int, Optional[int]]] = []
+    z.append(("Z1", 0, math.floor(0.60 * hrmax)))
     z.append(("Z2", math.floor(0.60 * hrmax), math.floor(0.70 * hrmax)))
     z.append(("Z3", math.floor(0.70 * hrmax), math.floor(0.80 * hrmax)))
     z.append(("Z4", math.floor(0.80 * hrmax), math.floor(0.90 * hrmax)))
-    z.append(("Z5", math.floor(0.90 * hrmax), None))             # >=90%
+    z.append(("Z5", math.floor(0.90 * hrmax), None))
     return z
 
-def _zones_karvonen(hrmax: int, hrrest: int = 60) -> List[Tuple[str, int, int]]:
+def _zones_karvonen(hrmax: int, hrrest: int = 60) -> List[Tuple[str, int, Optional[int]]]:
     """
-    Zones Karvonen (par défaut HRrest=60 si on ne la connaît pas) :
-    On utilise % de réserve cardiaque: HRr = HRrest + p*(HRmax-HRrest)
-    Bornes comme ci-dessus 60/70/80/90 %
+    Zones Karvonen (par défaut HRrest=60 si inconnue) :
+    HRr = HRrest + p*(HRmax-HRrest), p = 0.60/0.70/0.80/0.90
     """
     def bpm(p: float) -> int:
         return int(round(hrrest + p * (hrmax - hrrest)))
 
-    z = []
+    z: List[Tuple[str, int, Optional[int]]] = []
     z.append(("Z1", 0, bpm(0.60)))
     z.append(("Z2", bpm(0.60), bpm(0.70)))
     z.append(("Z3", bpm(0.70), bpm(0.80)))
@@ -341,8 +342,7 @@ def _zones_karvonen(hrmax: int, hrrest: int = 60) -> List[Tuple[str, int, int]]:
     z.append(("Z5", bpm(0.90), None))
     return z
 
-
-def _zone_index(bpm: int, zones: List[Tuple[str, int, int]]) -> int:
+def _zone_index(bpm: int, zones: List[Tuple[str, int, Optional[int]]]) -> int:
     for i, (_, lo, hi) in enumerate(zones):
         if hi is None:
             if bpm >= lo:
@@ -352,25 +352,21 @@ def _zone_index(bpm: int, zones: List[Tuple[str, int, int]]) -> int:
                 return i
     return 0
 
-
 def _trimp_banister(duration_s: int, avg_hr: float, hrmax: int) -> float:
     """
-    TRIMP (Banister, version simple, unisexe ici):
+    TRIMP (Banister, version simple, unisexe) :
     HRr = avg_hr / HRmax
     TRIMP = dur_min * HRr * 0.64 * exp(1.92 * HRr)
     """
     if duration_s <= 0 or not avg_hr or not hrmax:
         return 0.0
-    hr_r = max(0.0, min(1.2, avg_hr / hrmax))  # clamp un peu
+    hr_r = max(0.0, min(1.2, avg_hr / hrmax))
     dur_min = duration_s / 60.0
     return float(dur_min * hr_r * 0.64 * math.exp(1.92 * hr_r))
 
-
-def _time_in_zones_from_streams(hr_stream: List[int], zones: List[Tuple[str, int, int]], sampling_s: int | None = None) -> Dict[str, int]:
+def _time_in_zones_from_streams(hr_stream: List[int], zones: List[Tuple[str, int, Optional[int]]], sampling_s: Optional[int] = None) -> Dict[str, int]:
     """
     Approxime le temps passé dans chaque zone à partir d'un stream HR (1 point ~ 1s si échantillonné chaque seconde).
-    sampling_s: si connu, le pas d’échantillonnage (sinon 1s).
-    Retourne un dict { "Z1": secondes, ... }
     """
     if not hr_stream:
         return {z[0]: 0 for z in zones}
@@ -383,8 +379,7 @@ def _time_in_zones_from_streams(hr_stream: List[int], zones: List[Tuple[str, int
         counts[idx] += step
     return {zones[i][0]: counts[i] for i in range(len(zones))}
 
-
-def _time_in_zones_from_avg(avg_hr: float | None, duration_s: int, zones: List[Tuple[str, int, int]]) -> Dict[str, int]:
+def _time_in_zones_from_avg(avg_hr: Optional[float], duration_s: int, zones: List[Tuple[str, int, Optional[int]]]) -> Dict[str, int]:
     """
     Si pas de stream HR, on met toute la durée dans la zone où se situe la moyenne.
     """
@@ -395,15 +390,42 @@ def _time_in_zones_from_avg(avg_hr: float | None, duration_s: int, zones: List[T
     out[zones[idx][0]] = duration_s
     return out
 
+def _hr_decoupling(hr: List[float], vel_mps: List[float]) -> Optional[float]:
+    """
+    Dérive cardio: ratio (v/HR) H1 vs H2. % = (H2-H1)/H1*100
+    """
+    n = min(len(hr), len(vel_mps))
+    if n < 60:
+        return None
+    mid = n // 2
+    def avg_ratio(vv, hh):
+        pairs = [(vv[i], hh[i]) for i in range(len(vv)) if hh[i] and hh[i] > 0]
+        if not pairs:
+            return None
+        ratios = [p[0] / p[1] for p in pairs]
+        return sum(ratios) / len(ratios)
+    r1 = avg_ratio(vel_mps[:mid], hr[:mid])
+    r2 = avg_ratio(vel_mps[mid:], hr[mid:])
+    if r1 is None or r2 is None or r1 == 0:
+        return None
+    return float(round((r2 - r1) / r1 * 100.0, 2))
+
 
 def get_weekly_analysis(
     access_token: str,
     types: str = "all",
     with_streams: bool = True,
     zone_model: str = "percent_max",
-    hrmax: int | None = None,
-    lthr: int | None = None,   # réservé pour futurs modèles
+    hrmax: Optional[int] = None,
+    hrrest: Optional[int] = None,   # optionnel pour modèle Karvonen
+    compute_decoupling: bool = True,
 ) -> Dict[str, Any]:
+    """
+    Analyse cardio hebdo:
+    - TRIMP par séance + temps en zones
+    - Récupération: trimp_total, trimp_by_type, daily_trimp, monotony, strain
+    - HR decoupling (si streams présents) pour Run/Ride
+    """
     type_set = _parse_types_param(types)
     acts_raw = _fetch_week_activities(access_token, type_set)
 
@@ -412,7 +434,7 @@ def get_weekly_analysis(
     for a in acts_raw:
         brief = _activity_to_brief(a)
         if with_streams:
-            streams = _fetch_streams(access_token, brief["id"], ["heartrate", "velocity_smooth"])
+            streams = _fetch_streams(access_token, int(brief["id"]), ["heartrate", "velocity_smooth"])
             if streams:
                 brief["streams"] = {
                     "heartrate": streams.get("heartrate"),
@@ -422,22 +444,22 @@ def get_weekly_analysis(
 
     # Estimation HRmax si non fourni
     use_hrmax = hrmax or _estimate_hrmax(activities)
-    zones = _zones_percent_max(use_hrmax) if (use_hrmax and zone_model == "percent_max") else None
-
-    # Si modèle Karvonen et HRmax ok, zones sur base Karvonen (HRrest inconnu → 60 bpm par défaut)
-    if use_hrmax and zone_model == "karvonen":
-        zones = _zones_karvonen(use_hrmax, hrrest=60)
-
-    # Si toujours None (pas de HRmax trouvée), fallback sur HRmax=190 pour ne pas planter
-    if zones is None:
-        use_hrmax = 190
+    # Définition des zones
+    if zone_model == "karvonen" and use_hrmax:
+        zones = _zones_karvonen(use_hrmax, hrrest=hrrest or 60)
+    else:
+        if not use_hrmax:
+            use_hrmax = 190  # fallback pour ne pas planter
         zones = _zones_percent_max(use_hrmax)
 
-    # Analyse par séance
     zone_labels = [z[0] for z in zones]
     weekly_zone_seconds = {z: 0 for z in zone_labels}
     weekly_trimp = 0.0
     total_time_s = 0
+
+    # Récupération
+    daily_trimp: Dict[str, float] = {}
+    trimp_by_type: Dict[str, float] = {}
 
     analyzed_sessions: List[Dict[str, Any]] = []
 
@@ -445,11 +467,13 @@ def get_weekly_analysis(
         duration = int(b.get("moving_time_s") or 0)
         avg_hr = b.get("avg_heartrate")
         hr_stream = None
+        vel_stream = None
         if with_streams and isinstance(b.get("streams"), dict):
             hr_stream = b["streams"].get("heartrate")
+            vel_stream = b["streams"].get("velocity_smooth_mps")
 
         # Temps en zones
-        if hr_stream and len(hr_stream) >= max(10, duration // 6):  # heuristique: stream crédible
+        if hr_stream and len(hr_stream) >= max(10, duration // 6):
             tiz = _time_in_zones_from_streams(hr_stream, zones, sampling_s=None)
         else:
             tiz = _time_in_zones_from_avg(avg_hr, duration, zones)
@@ -457,18 +481,33 @@ def get_weekly_analysis(
         # TRIMP
         trimp = _trimp_banister(duration, float(avg_hr) if avg_hr else 0.0, use_hrmax)
 
+        # HR decoupling
+        dec = None
+        if compute_decoupling and hr_stream and vel_stream and (b.get("type") in {"Ride", "VirtualRide", "Run", "TrailRun"}):
+            dec = _hr_decoupling(hr_stream, vel_stream)
+
         # Agg weekly
         for z in zone_labels:
             weekly_zone_seconds[z] += int(tiz.get(z, 0))
         weekly_trimp += trimp
         total_time_s += duration
 
+        # Récupération: daily & par type
+        start_date = b.get("start_date_local") or ""
+        day_key = start_date[:10] if isinstance(start_date, str) and len(start_date) >= 10 else "unknown"
+        daily_trimp[day_key] = round(daily_trimp.get(day_key, 0.0) + trimp, 2)
+
+        t = b.get("type", "Other")
+        trimp_by_type[t] = round(trimp_by_type.get(t, 0.0) + trimp, 2)
+
         analyzed_sessions.append({
             **b,
             "time_in_zones_s": tiz,
             "trimp": round(trimp, 1),
+            **({"hr_decoupling_percent": dec} if dec is not None else {}),
         })
 
+    # Weekly résumé
     weekly_summary = {
         "sessions": len(analyzed_sessions),
         "total_time_h": round(total_time_s / 3600.0, 2),
@@ -476,9 +515,33 @@ def get_weekly_analysis(
         "time_in_zones_s": weekly_zone_seconds,
         "zone_model": zone_model,
         "hrmax_used": use_hrmax,
+        "hrrest_used": hrrest,
     }
 
-    # Agrégats par type en reprenant TRIMP et temps en zone
+    # Récupération: Monotony & Strain (Foster)
+    # mean_daily / std_daily (si std>0, sinon ~élevé), strain = weekly_trimp * monotony
+    monotony = None
+    strain = None
+    trimp_values = list(daily_trimp.values())
+    if trimp_values:
+        mean_daily = sum(trimp_values) / len(trimp_values)
+        if len(trimp_values) > 1:
+            var = sum((x - mean_daily) ** 2 for x in trimp_values) / (len(trimp_values) - 1)
+            std = math.sqrt(var)
+        else:
+            std = 0.0
+        monotony = round(mean_daily / (std if std > 0 else 1.0), 2)
+        strain = round(weekly_summary["trimp_total"] * monotony, 2)
+
+    recovery = {
+        "daily_trimp": daily_trimp,
+        "trimp_by_type": trimp_by_type,
+        "monotony": monotony,
+        "strain": strain,
+        "notes": "TRIMP (Banister). Monotony/Strain selon Foster. HR decoupling par séance si streams présents.",
+    }
+
+    # Agrégats par type (on garde tes agrégats + TRIMP/temps en zones)
     by_type: Dict[str, Dict[str, Any]] = {}
     for s in analyzed_sessions:
         t = s.get("type", "Other")
@@ -497,7 +560,6 @@ def get_weekly_analysis(
         for z in zone_labels:
             bt["time_in_zones_s"][z] += int(s["time_in_zones_s"].get(z, 0))
 
-    # formatage heures/arrondis
     for t, bt in by_type.items():
         bt["total_time_h"] = round(bt["total_time_s"] / 3600.0, 2)
         bt["trimp"] = round(bt["trimp"], 1)
@@ -505,6 +567,7 @@ def get_weekly_analysis(
 
     return {
         "weekly_summary": weekly_summary,
+        "recovery": recovery,
         "by_type": by_type,
         "sessions": analyzed_sessions,
         "zones_definition": [
