@@ -1,23 +1,143 @@
 openapi: 3.1.0
 info:
   title: Coach Triathlon API
-  description: API pour exposer les données d'entraînement depuis Strava.
-  version: "1.0.0"
+  version: "1.2.0"
+  description: API pour exposer les données d'entraînement depuis Strava (hebdomadaire).
 servers:
   - url: https://coachtriathlon.onrender.com
 paths:
+  /healthz:
+    get:
+      summary: Vérifier l'état du service
+      operationId: healthz
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
   /weekly-stats:
     get:
-      summary: Récupérer les statistiques hebdomadaires
+      summary: Résumé hebdomadaire (km/temps/sessions + compte par type)
       operationId: getWeeklyStats
+      parameters:
+        - name: types
+          in: query
+          required: false
+          description: "tri | all | liste séparée par des virgules (ex: Ride,Run,Swim,WeightTraining)"
+          schema:
+            type: string
+            default: tri
       responses:
-        '200':
+        "200":
           description: Données récupérées avec succès
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  message:
-                    type: string
-                    example: "Voici ton résumé de la semaine."
+                  total_km:
+                    type: number
+                    example: 42.2
+                  total_time_h:
+                    type: number
+                    example: 3.75
+                  sessions:
+                    type: integer
+                    example: 6
+                  counts_by_type:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                    example:
+                      Ride: 3
+                      Run: 2
+                      WeightTraining: 1
+
+  /weekly-details:
+    get:
+      summary: Détails hebdomadaires (par sport + activités, streams optionnels)
+      operationId: getWeeklyDetails
+      parameters:
+        - name: with_streams
+          in: query
+          required: false
+          description: Ajouter les séries temporelles FC/vitesse si disponibles
+          schema:
+            type: boolean
+            default: false
+        - name: types
+          in: query
+          required: false
+          description: "tri | all | liste séparée par des virgules (ex: Ride,Run,Swim,WeightTraining)"
+          schema:
+            type: string
+            default: tri
+      responses:
+        "200":
+          description: Détail des activités
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: object
+                    properties:
+                      total_km: { type: number }
+                      total_time_h: { type: number }
+                      activities: { type: integer }
+                  by_sport:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        count: { type: integer }
+                        total_km: { type: number }
+                        total_time_h: { type: number }
+                        elev_gain_m: { type: number }
+                        avg_hr:
+                          type: number
+                          nullable: true
+                        max_hr:
+                          type: number
+                          nullable: true
+                  activities:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        type: { type: string }
+                        start_date_local: { type: string }
+                        distance_km: { type: number }
+                        moving_time_s: { type: integer }
+                        elapsed_time_s: { type: integer }
+                        elev_gain_m: { type: number }
+                        avg_speed_kmh: { type: number, nullable: true }
+                        max_speed_kmh: { type: number, nullable: true }
+                        avg_heartrate: { type: number, nullable: true }
+                        max_heartrate: { type: number, nullable: true }
+                        suffer_score: { type: number, nullable: true }
+                        trainer: { type: boolean, nullable: true }
+                        commute: { type: boolean, nullable: true }
+                        streams:
+                          type: object
+                          nullable: true
+                          properties:
+                            heartrate:
+                              type: array
+                              items: { type: number }
+                              nullable: true
+                            velocity_smooth_mps:
+                              type: array
+                              items: { type: number }
+                              nullable: true
+
