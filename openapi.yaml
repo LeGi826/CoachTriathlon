@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Coach Triathlon API
-  version: "1.2.0"
+  version: "1.3.0"
   description: API pour exposer les données d'entraînement depuis Strava (hebdomadaire).
 servers:
   - url: https://coachtriathlon.onrender.com
@@ -27,6 +27,12 @@ paths:
       summary: Résumé hebdomadaire (km/temps/sessions + compte par type)
       operationId: getWeeklyStats
       parameters:
+        - name: access_token
+          in: query
+          required: false
+          description: Jeton Strava (sinon ENV/refresh utilisés côté serveur)
+          schema:
+            type: string
         - name: types
           in: query
           required: false
@@ -65,10 +71,16 @@ paths:
       summary: Détails hebdomadaires (par sport + activités, streams optionnels)
       operationId: getWeeklyDetails
       parameters:
+        - name: access_token
+          in: query
+          required: false
+          description: Jeton Strava (sinon ENV/refresh utilisés côté serveur)
+          schema:
+            type: string
         - name: with_streams
           in: query
           required: false
-          description: Ajouter les séries temporelles FC/vitesse si disponibles
+          description: Ajouter les séries FC/vitesse si disponibles
           schema:
             type: boolean
             default: false
@@ -102,12 +114,8 @@ paths:
                         total_km: { type: number }
                         total_time_h: { type: number }
                         elev_gain_m: { type: number }
-                        avg_hr:
-                          type: number
-                          nullable: true
-                        max_hr:
-                          type: number
-                          nullable: true
+                        avg_hr: { type: number, nullable: true }
+                        max_hr: { type: number, nullable: true }
                   activities:
                     type: array
                     items:
@@ -140,4 +148,3 @@ paths:
                               type: array
                               items: { type: number }
                               nullable: true
-
