@@ -146,7 +146,3 @@ def get_weekly_details(_token_from_query: str | None, with_streams: bool = False
             a["streams"] = s  # peut être None si indispo
 
     return base
-
-        "total_time_h": round(total_duration / 3600, 2),
-        "rides": count
-    }
