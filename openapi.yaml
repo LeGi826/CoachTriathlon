@@ -31,8 +31,7 @@ paths:
         - in: query
           name: access_token
           required: false
-          schema:
-            type: string
+          schema: { type: string }
           description: >
             Strava OAuth access_token.
             Si omis, le serveur tentera un rafraîchissement via STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN.
@@ -40,9 +39,7 @@ paths:
         - in: query
           name: types
           required: false
-          schema:
-            type: string
-            default: all
+          schema: { type: string, default: all }
           description: >
             "all" ou liste CSV (ex: "Ride,Run,Swim,Workout,WeightTraining").
       responses:
@@ -58,8 +55,7 @@ paths:
                   sessions: { type: integer, example: 6 }
                   counts_by_type:
                     type: object
-                    additionalProperties:
-                      type: integer
+                    additionalProperties: { type: integer }
 
   /weekly-details:
     get:
@@ -69,25 +65,20 @@ paths:
         - in: query
           name: access_token
           required: false
-          schema:
-            type: string
+          schema: { type: string }
           description: >
             Strava OAuth access_token.
             Si omis, le serveur tentera un rafraîchissement via STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN.
         - in: query
           name: types
           required: false
-          schema:
-            type: string
-            default: all
+          schema: { type: string, default: all }
           description: >
             "all" ou liste CSV (ex: "Ride,Run,Swim,Workout,WeightTraining").
         - in: query
           name: with_streams
           required: false
-          schema:
-            type: boolean
-            default: false
+          schema: { type: boolean, default: false }
           description: Inclure les séries temporelles HR/vitesse si disponibles.
       responses:
         "200":
@@ -153,56 +144,40 @@ paths:
         - in: query
           name: access_token
           required: false
-          schema:
-            type: string
+          schema: { type: string }
           description: >
             Strava OAuth access_token.
-            Si omis, le serveur tentera un rafraîchissement via STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN.
+            Si omis, rafraîchissement via STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN.
         - in: query
           name: types
           required: false
-          schema:
-            type: string
-            default: all
+          schema: { type: string, default: all }
           description: >
             "all" ou liste CSV (ex: "Ride,Run,Swim,Workout,WeightTraining").
         - in: query
           name: with_streams
           required: false
-          schema:
-            type: boolean
-            default: true
-          description: Utiliser les streams HR/vitesse si disponibles (meilleur calcul des zones/decoupling).
+          schema: { type: boolean, default: true }
+          description: Utiliser les streams HR/vitesse si disponibles.
         - in: query
           name: zone_model
           required: false
-          schema:
-            type: string
-            enum: [percent_max, karvonen]
-            default: percent_max
+          schema: { type: string, enum: [percent_max, karvonen], default: percent_max }
           description: Modèle de zones HR.
         - in: query
           name: hrmax
           required: false
-          schema:
-            type: integer
-            minimum: 100
-            maximum: 230
-          description: FC max (bpm). Si omis, estimée depuis la semaine (max des max HR observées, fallback 190).
+          schema: { type: integer, minimum: 100, maximum: 230 }
+          description: FC max (bpm). Estimée si omise.
         - in: query
           name: hrrest
           required: false
-          schema:
-            type: integer
-            minimum: 30
-            maximum: 120
-          description: FC repos (bpm). Utilisée pour Karvonen (défaut 60 si non fourni).
+          schema: { type: integer, minimum: 30, maximum: 120 }
+          description: FC repos (bpm) — utile pour Karvonen (défaut 60).
         - in: query
           name: compute_decoupling
           required: false
-          schema:
-            type: boolean
-            default: true
+          schema: { type: boolean, default: true }
           description: Calcule l'HR decoupling (Run/Ride) quand les streams sont disponibles.
       responses:
         "200":
@@ -217,12 +192,24 @@ paths:
                     properties:
                       sessions: { type: integer }
                       total_time_h: { type: number }
-                      trimp_total: { type: number, description: "Somme des TRIMP" }
+                      trimp_total: { type: number }
                       time_in_zones_s:
                         type: object
-                        additionalProperties: { type: integer, description: "Temps (s) par zone Z1..Z5" }
+                        additionalProperties: { type: integer }
                       zone_model: { type: string }
                       hrmax_used: { type: integer }
+                      hrrest_used: { type: integer, nullable: true }
+                  recovery:
+                    type: object
+                    properties:
+                      daily_trimp:
+                        type: object
+                        additionalProperties: { type: number }
+                      trimp_by_type:
+                        type: object
+                        additionalProperties: { type: number }
+                      monotony: { type: number, nullable: true }
+                      strain: { type: number, nullable: true }
                   by_type:
                     type: object
                     additionalProperties:
