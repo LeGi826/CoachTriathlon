@@ -27,19 +27,16 @@ app.add_middleware(
 
 def _get_token(query_token: Optional[str]) -> str:
     """
-    Récupère un access_token Strava depuis:
-    1) le paramètre d'URL ?access_token=
-    2) la variable d'environnement ACCESS_TOKEN
-    3) sinon chaîne vide -> on laisse strava_client tenter un refresh via STRAVA_REFRESH_TOKEN.
+    1) ?access_token=... si fourni
+    2) sinon ACCESS_TOKEN (env)
+    3) sinon chaîne vide -> strava_client rafraîchira via STRAVA_REFRESH_TOKEN.
     """
     if query_token:
         return query_token
     env_token = os.getenv("ACCESS_TOKEN")
     if env_token:
         return env_token
-    # Pas de token direct -> on renvoie "", strava_client fera un refresh automatique (401 -> refresh_token)
-    return ""
-
+    return ""  # on laisse strava_client gérer le refresh (401 -> refresh_token)
 
 # ---------- Endpoints ----------
 
@@ -47,14 +44,13 @@ def _get_token(query_token: Optional[str]) -> str:
 def healthz():
     return {"status": "ok"}
 
-
 @app.get("/weekly-stats")
 def weekly_stats(
     access_token: Optional[str] = Query(None, description="Token Strava (optionnel si refresh token configuré)"),
     types: str = Query("all", description="Liste de types séparés par des virgules (ou 'all')."),
 ):
     """
-    Stats hebdo compactes (tous sports) + distribution par type.
+    Stats hebdo compactes + distribution par type.
     """
     token = _get_token(access_token)
     try:
@@ -63,7 +59,6 @@ def weekly_stats(
     except Exception as e:
         return JSONResponse({"error": "weekly_stats_failed", "detail": str(e)}, status_code=500)
 
-
 @app.get("/weekly-details")
 def weekly_details(
     access_token: Optional[str] = Query(None, description="Token Strava (optionnel si refresh token configuré)"),
@@ -71,7 +66,7 @@ def weekly_details(
     with_streams: bool = Query(False, description="Inclure les streams HR/vitesse (peut être lourd)"),
 ):
     """
-    Détails complets hebdo + agrégats par sport. (Cardio de base si HR présent).
+    Détails hebdo par sport + liste complète des activités (+ streams si demandé).
     """
     token = _get_token(access_token)
     try:
@@ -80,22 +75,21 @@ def weekly_details(
     except Exception as e:
         return JSONResponse({"error": "weekly_details_failed", "detail": str(e)}, status_code=500)
 
-
 @app.get("/weekly-analysis")
 def weekly_analysis(
     access_token: Optional[str] = Query(None, description="Token Strava (optionnel si refresh token configuré)"),
     types: str = Query("all", description="Liste de types séparés par des virgules (ou 'all')."),
     with_streams: bool = Query(True, description="Inclure les streams HR/vitesse pour zones/decoupling."),
     zone_model: str = Query("percent_max", description="'percent_max' ou 'karvonen'"),
-    hrmax: Optional[int] = Query(None, description="FC max (bpm) — sinon estimée sur la semaine"),
+    hrmax: Optional[int] = Query(None, description="FC max (bpm) — sinon estimée"),
     hrrest: Optional[int] = Query(None, description="FC repos (bpm) — utile pour Karvonen (défaut 60)"),
     compute_decoupling: bool = Query(True, description="Calcule l'HR decoupling si streams dispo"),
 ):
     """
     Analyse cardio hebdo:
-    - TRIMP par séance + temps en zones
-    - Récup (daily_trimp, trimp_by_type, monotony, strain)
-    - HR decoupling (Run/Ride) si streams présents
+      - TRIMP & temps en zones par séance
+      - Récup (daily_trimp, trimp_by_type, monotony, strain)
+      - HR decoupling (Run/Ride) si streams présents
     """
     token = _get_token(access_token)
     try:
