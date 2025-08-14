@@ -1,3 +1,78 @@
+openapi: 3.1.0
+info:
+  title: Coach Triathlon API
+  description: API pour exposer et analyser les données d'entraînement Strava (hebdo).
+  version: 1.3.0
+servers:
+  - url: https://coachtriathlon.onrender.com
+
+paths:
+  /healthz:
+    get:
+      summary: Status de santé
+      operationId: healthz
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /weekly-stats:
+    get:
+      summary: Statistiques hebdo (résumé)
+      operationId: getWeeklyStats
+      parameters:
+        - in: query
+          name: access_token
+          required: false
+          schema: { type: string }
+          description: >
+            Strava OAuth access_token.
+            Si omis, le serveur tentera un rafraîchissement via
+            STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN
+            (ou utilisera ACCESS_TOKEN en variable d'env si présent).
+        - in: query
+          name: types
+          required: false
+          schema: { type: string, default: all }
+          description: "all ou liste CSV (ex: 'Ride,Run,Swim,Workout,WeightTraining')."
+      responses:
+        "200":
+          description: Données récupérées avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeeklyStatsResponse'
+        "500":
+          description: Erreur interne
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /weekly-details:
+    get:
+      summary: Détails hebdo (par sport + activités) avec options de streams
+      operationId: getWeeklyDetails
+      parameters:
+        - in: query
+          name: access_token
+          required: false
+          schema: { type: string }
+          description: >
+            Strava OAuth access_token.
+            Si omis, le serveur tentera un rafraîchissement via STRAVA_*.
+        - in: query
+          name: types
+          required: false
+          schema: { type: string, default: all }
+          description: "all ou liste CSV (ex: 'Ride,Run,Swim,Workout,WeightTraining')."
         - in: query
           name: streams_mode
           required: false
@@ -5,33 +80,278 @@
             type: string
             enum: [none, summary, full]
             default: none
-          description: >
-            none    : pas de séries
-            summary : calcule temps en zones/decoupling sans renvoyer les séries
-            full    : renvoie les séries downsamplées
+          description: |
+            Contrôle l'usage/retour des séries :
+              - none    : pas de séries
+              - summary : séries utilisées pour calculer `time_in_zones_s` (et décorrélation si demandée) mais **non** renvoyées
+              - full    : séries HR/vitesse **retournées** (downsample) dans `activities[].streams`
         - in: query
           name: max_points
           required: false
-          schema:
-            type: integer
-            minimum: 100
-            maximum: 10000
-            default: 1500
-          description: Cap max points par série (streams_mode=full)
+          schema: { type: integer, minimum: 100, maximum: 10000, default: 1500 }
+          description: Cap max de points par série quand `streams_mode=full` (downsample côté serveur).
         - in: query
           name: compute_decoupling
           required: false
-          schema:
-            type: boolean
-            default: false
-          description: Calcule la décorrélation HR si streams disponibles
+          schema: { type: boolean, default: false }
+          description: Calcule la décorrélation HR (Run/Ride) si des streams sont disponibles.
         - in: query
           name: hrmax
           required: false
           schema: { type: integer, minimum: 100, maximum: 230 }
-          description: FC max (bpm) pour le calcul des zones (sinon estimée)
+          description: FC max (bpm) pour le calcul des zones (sinon estimée sur la semaine, fallback 190).
         - in: query
           name: hrrest
           required: false
           schema: { type: integer, minimum: 30, maximum: 120 }
-          description: FC repos (bpm) (utile si tu veux imposer Karvonen côté détails)
+          description: FC repos (bpm) — utile si tu forces un modèle Karvonen côté client (ici zones = percent_max).
+      responses:
+        "200":
+          description: Données récupérées avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeeklyDetailsResponse'
+        "500":
+          description: Erreur interne
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /weekly-analysis:
+    get:
+      summary: Analyse cardio hebdo (zones, TRIMP, récupération, décorrélation HR)
+      operationId: getWeeklyAnalysis
+      parameters:
+        - in: query
+          name: access_token
+          required: false
+          schema: { type: string }
+          description: >
+            Strava OAuth access_token.
+            Si omis, le serveur tentera un rafraîchissement via STRAVA_*.
+        - in: query
+          name: types
+          required: false
+          schema: { type: string, default: all }
+          description: "all ou liste CSV (ex: 'Ride,Run,Swim,Workout,WeightTraining')."
+        - in: query
+          name: with_streams
+          required: false
+          schema: { type: boolean, default: true }
+          description: Utiliser les streams HR/vitesse pour calculer zones/decoupling côté serveur
+        - in: query
+          name: zone_model
+          required: false
+          schema: { type: string, enum: [percent_max, karvonen], default: percent_max }
+          description: Modèle de zones HR.
+        - in: query
+          name: hrmax
+          required: false
+          schema: { type: integer, minimum: 100, maximum: 230 }
+          description: FC max (bpm). Si omis, estimée depuis la semaine (max observé, fallback 190).
+        - in: query
+          name: hrrest
+          required: false
+          schema: { type: integer, minimum: 30, maximum: 120 }
+          description: FC repos (bpm). Utilisée pour Karvonen (défaut 60 si non fourni).
+        - in: query
+          name: compute_decoupling
+          required: false
+          schema: { type: boolean, default: true }
+          description: Calcule la décorrélation HR (Run/Ride) quand les streams sont disponibles.
+      responses:
+        "200":
+          description: Analyse calculée avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeeklyAnalysisResponse'
+        "500":
+          description: Erreur interne
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+
+    ErrorResponse:
+      type: object
+      properties:
+        error: { type: string, example: weekly_details_failed }
+        detail: { type: string, example: "Message d'erreur exploitable" }
+
+    WeeklyStatsResponse:
+      type: object
+      properties:
+        total_km: { type: number, example: 42.5 }
+        total_time_h: { type: number, example: 3.75 }
+        sessions: { type: integer, example: 6 }
+        counts_by_type:
+          type: object
+          additionalProperties: { type: integer }
+
+    Streams:
+      type: object
+      properties:
+        heartrate:
+          type: array
+          items: { type: number }
+          description: BPM (échantillonnage Strava). Downsamplé si `streams_mode=full`.
+        velocity_smooth_mps:
+          type: array
+          items: { type: number }
+          description: Vitesse lissée (m/s). Downsamplé si `streams_mode=full`.
+
+    ActivityBase:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        type: { type: string }
+        start_date_local: { type: string }
+        distance_km: { type: number }
+        moving_time_s: { type: integer }
+        elapsed_time_s: { type: integer }
+        elev_gain_m: { type: number }
+        avg_speed_kmh: { type: number, nullable: true }
+        max_speed_kmh: { type: number, nullable: true }
+        avg_heartrate: { type: number, nullable: true }
+        max_heartrate: { type: number, nullable: true }
+        suffer_score: { type: number, nullable: true }
+        trainer: { type: boolean }
+        commute: { type: boolean }
+
+    ActivityDetailsItem:
+      allOf:
+        - $ref: '#/components/schemas/ActivityBase'
+        - type: object
+          properties:
+            time_in_zones_s:
+              type: object
+              additionalProperties: { type: integer }
+              description: Temps passé par zone HR (Z1..Z5) en secondes.
+            hr_decoupling_percent:
+              type: number
+              nullable: true
+              description: Décorrélation HR % (si calculée et pertinente).
+            streams:
+              $ref: '#/components/schemas/Streams'
+          description: >
+            `streams` n'est présent que si `streams_mode=full`.
+            En modes `none`/`summary`, seules les métriques calculées sont renvoyées.
+
+    WeeklyDetailsResponse:
+      type: object
+      properties:
+        summary:
+          type: object
+          properties:
+            total_km: { type: number }
+            total_time_h: { type: number }
+            activities: { type: integer }
+        by_sport:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              count: { type: integer }
+              total_km: { type: number }
+              elev_gain_m: { type: number }
+              total_time_h: { type: number }
+              avg_hr: { type: number, nullable: true }
+              max_hr: { type: number, nullable: true }
+        activities:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivityDetailsItem'
+        zones_definition:
+          type: array
+          items:
+            type: object
+            properties:
+              zone: { type: string, example: Z3 }
+              min_bpm: { type: integer }
+              max_bpm: { type: integer, nullable: true }
+        hrmax_used:
+          type: integer
+          description: HRmax utilisée pour la construction des zones (estimée ou fournie).
+        streams_mode:
+          type: string
+          enum: [none, summary, full]
+        max_points:
+          type: integer
+          nullable: true
+          description: Rappel du cap de points par série lorsque `streams_mode=full`.
+
+    WeeklyAnalysisSessionItem:
+      allOf:
+        - $ref: '#/components/schemas/ActivityBase'
+        - type: object
+          properties:
+            trimp: { type: number }
+            time_in_zones_s:
+              type: object
+              additionalProperties: { type: integer }
+            hr_decoupling_percent:
+              type: number
+              nullable: true
+            streams:
+              $ref: '#/components/schemas/Streams'
+          description: >
+            Dans l'implémentation actuelle, les streams peuvent être présents si
+            `with_streams=true`. Ils ne sont pas downsamplés dans /weekly-analysis.
+
+    WeeklyAnalysisResponse:
+      type: object
+      properties:
+        weekly_summary:
+          type: object
+          properties:
+            sessions: { type: integer }
+            total_time_h: { type: number }
+            trimp_total: { type: number, description: "Somme des TRIMP (Banister)" }
+            time_in_zones_s:
+              type: object
+              additionalProperties: { type: integer, description: "Temps (s) par zone Z1..Z5" }
+            zone_model: { type: string, enum: [percent_max, karvonen] }
+            hrmax_used: { type: integer }
+            hrrest_used: { type: integer, nullable: true }
+        recovery:
+          type: object
+          properties:
+            daily_trimp:
+              type: object
+              additionalProperties: { type: number }
+            trimp_by_type:
+              type: object
+              additionalProperties: { type: number }
+            monotony: { type: number, nullable: true }
+            strain: { type: number, nullable: true }
+            notes: { type: string }
+        by_type:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              count: { type: integer }
+              total_time_h: { type: number }
+              trimp: { type: number }
+              time_in_zones_s:
+                type: object
+                additionalProperties: { type: integer }
+        sessions:
+          type: array
+          items:
+            $ref: '#/components/schemas/WeeklyAnalysisSessionItem'
+        zones_definition:
+          type: array
+          items:
+            type: object
+            properties:
+              zone: { type: string, example: Z3 }
+              min_bpm: { type: integer }
+              max_bpm: { type: integer, nullable: true }
