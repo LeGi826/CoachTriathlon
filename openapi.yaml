@@ -1,264 +1,37 @@
-openapi: 3.1.0
-info:
-  title: Coach Triathlon API
-  description: API pour exposer et analyser les données d'entraînement depuis Strava (hebdo).
-  version: 1.2.0
-servers:
-  - url: https://coachtriathlon.onrender.com
-
-paths:
-  /healthz:
-    get:
-      summary: Status de santé
-      operationId: healthz
-      responses:
-        "200":
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: ok
-
-  /weekly-stats:
-    get:
-      summary: Statistiques hebdo (résumé)
-      operationId: getWeeklyStats
-      parameters:
         - in: query
-          name: access_token
+          name: streams_mode
           required: false
-          schema: { type: string }
+          schema:
+            type: string
+            enum: [none, summary, full]
+            default: none
           description: >
-            Strava OAuth access_token.
-            Si omis, le serveur tentera un rafraîchissement via STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN.
-            À défaut, la variable d'env ACCESS_TOKEN peut aussi être utilisée.
+            none    : pas de séries
+            summary : calcule temps en zones/decoupling sans renvoyer les séries
+            full    : renvoie les séries downsamplées
         - in: query
-          name: types
+          name: max_points
           required: false
-          schema: { type: string, default: all }
-          description: >
-            "all" ou liste CSV (ex: "Ride,Run,Swim,Workout,WeightTraining").
-      responses:
-        "200":
-          description: Données récupérées avec succès
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  total_km: { type: number, example: 42.5 }
-                  total_time_h: { type: number, example: 3.75 }
-                  sessions: { type: integer, example: 6 }
-                  counts_by_type:
-                    type: object
-                    additionalProperties: { type: integer }
-
-  /weekly-details:
-    get:
-      summary: Détails hebdo (par sport + activités)
-      operationId: getWeeklyDetails
-      parameters:
+          schema:
+            type: integer
+            minimum: 100
+            maximum: 10000
+            default: 1500
+          description: Cap max points par série (streams_mode=full)
         - in: query
-          name: access_token
+          name: compute_decoupling
           required: false
-          schema: { type: string }
-          description: >
-            Strava OAuth access_token.
-            Si omis, le serveur tentera un rafraîchissement via STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN.
-        - in: query
-          name: types
-          required: false
-          schema: { type: string, default: all }
-          description: >
-            "all" ou liste CSV (ex: "Ride,Run,Swim,Workout,WeightTraining").
-        - in: query
-          name: with_streams
-          required: false
-          schema: { type: boolean, default: false }
-          description: Inclure les séries temporelles HR/vitesse si disponibles.
-      responses:
-        "200":
-          description: Données récupérées avec succès
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  summary:
-                    type: object
-                    properties:
-                      total_km: { type: number }
-                      total_time_h: { type: number }
-                      activities: { type: integer }
-                  by_sport:
-                    type: object
-                    additionalProperties:
-                      type: object
-                      properties:
-                        count: { type: integer }
-                        total_km: { type: number }
-                        elev_gain_m: { type: number }
-                        total_time_h: { type: number }
-                        avg_hr: { type: number, nullable: true }
-                        max_hr: { type: number, nullable: true }
-                  activities:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id: { type: integer }
-                        name: { type: string }
-                        type: { type: string }
-                        start_date_local: { type: string }
-                        distance_km: { type: number }
-                        moving_time_s: { type: integer }
-                        elapsed_time_s: { type: integer }
-                        elev_gain_m: { type: number }
-                        avg_speed_kmh: { type: number, nullable: true }
-                        max_speed_kmh: { type: number, nullable: true }
-                        avg_heartrate: { type: number, nullable: true }
-                        max_heartrate: { type: number, nullable: true }
-                        suffer_score: { type: number, nullable: true }
-                        trainer: { type: boolean }
-                        commute: { type: boolean }
-                        streams:
-                          type: object
-                          nullable: true
-                          properties:
-                            heartrate:
-                              type: array
-                              items: { type: number }
-                            velocity_smooth_mps:
-                              type: array
-                              items: { type: number }
-
-  /weekly-analysis:
-    get:
-      summary: Analyse cardio hebdo (zones, TRIMP, récupération, décorrélation HR)
-      operationId: getWeeklyAnalysis
-      parameters:
-        - in: query
-          name: access_token
-          required: false
-          schema: { type: string }
-          description: >
-            Strava OAuth access_token.
-            Si omis, rafraîchissement via STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET / STRAVA_REFRESH_TOKEN.
-        - in: query
-          name: types
-          required: false
-          schema: { type: string, default: all }
-          description: >
-            "all" ou liste CSV (ex: "Ride,Run,Swim,Workout,WeightTraining").
-        - in: query
-          name: with_streams
-          required: false
-          schema: { type: boolean, default: true }
-          description: Utiliser les streams HR/vitesse si disponibles.
-        - in: query
-          name: zone_model
-          required: false
-          schema: { type: string, enum: [percent_max, karvonen], default: percent_max }
-          description: Modèle de zones HR.
+          schema:
+            type: boolean
+            default: false
+          description: Calcule la décorrélation HR si streams disponibles
         - in: query
           name: hrmax
           required: false
           schema: { type: integer, minimum: 100, maximum: 230 }
-          description: FC max (bpm). Estimée si omise.
+          description: FC max (bpm) pour le calcul des zones (sinon estimée)
         - in: query
           name: hrrest
           required: false
           schema: { type: integer, minimum: 30, maximum: 120 }
-          description: FC repos (bpm) — utile pour Karvonen (défaut 60).
-        - in: query
-          name: compute_decoupling
-          required: false
-          schema: { type: boolean, default: true }
-          description: Calcule l'HR decoupling (Run/Ride) quand les streams sont disponibles.
-      responses:
-        "200":
-          description: Analyse calculée avec succès
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  weekly_summary:
-                    type: object
-                    properties:
-                      sessions: { type: integer }
-                      total_time_h: { type: number }
-                      trimp_total: { type: number }
-                      time_in_zones_s:
-                        type: object
-                        additionalProperties: { type: integer }
-                      zone_model: { type: string }
-                      hrmax_used: { type: integer }
-                      hrrest_used: { type: integer, nullable: true }
-                  recovery:
-                    type: object
-                    properties:
-                      daily_trimp:
-                        type: object
-                        additionalProperties: { type: number }
-                      trimp_by_type:
-                        type: object
-                        additionalProperties: { type: number }
-                      monotony: { type: number, nullable: true }
-                      strain: { type: number, nullable: true }
-                  by_type:
-                    type: object
-                    additionalProperties:
-                      type: object
-                      properties:
-                        count: { type: integer }
-                        total_time_h: { type: number }
-                        trimp: { type: number }
-                        time_in_zones_s:
-                          type: object
-                          additionalProperties: { type: integer }
-                  sessions:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id: { type: integer }
-                        name: { type: string }
-                        type: { type: string }
-                        start_date_local: { type: string }
-                        distance_km: { type: number }
-                        moving_time_s: { type: integer }
-                        elapsed_time_s: { type: integer }
-                        elev_gain_m: { type: number }
-                        avg_speed_kmh: { type: number, nullable: true }
-                        max_speed_kmh: { type: number, nullable: true }
-                        avg_heartrate: { type: number, nullable: true }
-                        max_heartrate: { type: number, nullable: true }
-                        trainer: { type: boolean }
-                        commute: { type: boolean }
-                        trimp: { type: number }
-                        time_in_zones_s:
-                          type: object
-                          additionalProperties: { type: integer }
-                        streams:
-                          type: object
-                          nullable: true
-                          properties:
-                            heartrate:
-                              type: array
-                              items: { type: number }
-                            velocity_smooth_mps:
-                              type: array
-                              items: { type: number }
-                  zones_definition:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        zone: { type: string, example: Z3 }
-                        min_bpm: { type: integer }
-                        max_bpm: { type: integer, nullable: true }
+          description: FC repos (bpm) (utile si tu veux imposer Karvonen côté détails)
