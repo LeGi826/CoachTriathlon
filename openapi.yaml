@@ -79,7 +79,7 @@ paths:
           schema:
             type: string
             enum: [none, summary, full]
-            default: none
+            default: summary
           description: |
             Contrôle l'usage/retour des séries :
               - none    : pas de séries
@@ -139,7 +139,7 @@ paths:
         - in: query
           name: with_streams
           required: false
-          schema: { type: boolean, default: true }
+          schema: { type: boolean, default: false }
           description: Utiliser les streams HR/vitesse pour calculer zones/decoupling côté serveur
         - in: query
           name: zone_model
