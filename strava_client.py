@@ -1,6 +1,6 @@
 import os
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 from typing import Dict, Any, List, Tuple, Optional
 
 import requests
@@ -8,19 +8,59 @@ import requests
 STRAVA_BASE = "https://www.strava.com/api/v3"
 
 # -----------------------------
-# Helpers Auth & Dates
+# Helpers Dates
 # -----------------------------
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
-def _week_start_end(today: datetime) -> Tuple[int, int]:
-    local_today = today.astimezone()
-    start_of_week = (local_today - timedelta(days=local_today.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    end_of_week = start_of_week + timedelta(days=7) - timedelta(seconds=1)
-    return int(start_of_week.timestamp()), int(end_of_week.timestamp())
+def _monday_of_iso_week(iso_year: int, iso_week: int) -> date:
+    # ISO: Monday = day 1
+    # construction: date from first Thursday trick
+    # but here simpler: find Jan 4th (always week 1), go to its Monday, then add (iso_week-1)*7
+    jan4 = date(iso_year, 1, 4)
+    jan4_monday = jan4 - timedelta(days=(jan4.isoweekday() - 1))
+    return jan4_monday + timedelta(weeks=iso_week - 1)
+
+def _week_range_from_params(
+    week_start: Optional[str],
+    iso_year: Optional[int],
+    iso_week: Optional[int],
+) -> Tuple[int, int, str]:
+    """
+    Retourne (after_ts, before_ts, label) en epoch seconds pour:
+      - la semaine de week_start (YYYY-MM-DD, attendu lundi)
+      - OU la semaine ISO (iso_year + iso_week)
+      - SINON la semaine courante (lundi->dimanche)
+    """
+    if week_start:
+        try:
+            d = datetime.strptime(week_start, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError("week_start doit être au format YYYY-MM-DD (ex: 2025-08-11).")
+        # On normalise au lundi de la semaine de d (au cas où)
+        start = d - timedelta(days=(d.isoweekday() - 1))
+    elif iso_year and iso_week:
+        try:
+            start = _monday_of_iso_week(int(iso_year), int(iso_week))
+        except Exception:
+            raise ValueError("iso_year/iso_week invalides. Exemple: iso_year=2025&iso_week=33")
+    else:
+        # semaine courante (locale)
+        local_today = _utc_now().astimezone().date()
+        start = local_today - timedelta(days=(local_today.isoweekday() - 1))
+
+    end = start + timedelta(days=7) - timedelta(seconds=1)
+
+    start_dt = datetime(start.year, start.month, start.day, 0, 0, 0, tzinfo=timezone.utc)
+    end_dt = datetime(end.year, end.month, end.day, 23, 59, 59, tzinfo=timezone.utc)
+
+    label = f"{start.isoformat()}..{end.isoformat()}"
+    return int(start_dt.timestamp()), int(end_dt.timestamp()), label
+
+# -----------------------------
+# Helpers Auth
+# -----------------------------
 
 def _refresh_access_token_if_needed() -> Optional[str]:
     client_id = os.getenv("STRAVA_CLIENT_ID")
@@ -79,8 +119,7 @@ def _parse_types_param(types: str) -> set[str]:
     parts = [t.strip() for t in types.split(",") if t.strip()]
     return set(parts) if parts else DEFAULT_TYPES
 
-def _fetch_week_activities(access_token: str, types: set[str]) -> List[Dict[str, Any]]:
-    after_ts, before_ts = _week_start_end(_utc_now())
+def _fetch_activities_in_range(access_token: str, after_ts: int, before_ts: int, types: set[str]) -> List[Dict[str, Any]]:
     activities: List[Dict[str, Any]] = []
     page, per_page = 1, 100
     while True:
@@ -143,7 +182,7 @@ def _fetch_streams(access_token: str, activity_id: int, stream_keys: List[str]) 
     return out
 
 # -----------------------------
-# Mappings & Safe getters
+# Mapping utiles
 # -----------------------------
 
 def _safe(a: Dict[str, Any], key: str, default=None):
@@ -264,12 +303,20 @@ def _hr_decoupling(hr: List[float], vel_mps: List[float]) -> Optional[float]:
     return float(round((r2 - r1) / r1 * 100.0, 2))
 
 # -----------------------------
-# Public: weekly summary/details
+# Public: weekly summary/details (semaine cible ou courante)
 # -----------------------------
 
-def get_weekly_summary(access_token: str, types: str = "all") -> Dict[str, Any]:
+def get_weekly_summary(
+    access_token: str,
+    types: str = "all",
+    week_start: Optional[str] = None,
+    iso_year: Optional[int] = None,
+    iso_week: Optional[int] = None,
+) -> Dict[str, Any]:
     type_set = _parse_types_param(types)
-    acts = _fetch_week_activities(access_token, type_set)
+    after_ts, before_ts, label = _week_range_from_params(week_start, iso_year, iso_week)
+    acts = _fetch_activities_in_range(access_token, after_ts, before_ts, type_set)
+
     total_km, total_time = 0.0, 0
     counts: Dict[str, int] = {}
     for a in acts:
@@ -277,7 +324,9 @@ def get_weekly_summary(access_token: str, types: str = "all") -> Dict[str, Any]:
         total_time += int(_safe(a, "moving_time", 0))
         t = _safe(a, "type", "Other")
         counts[t] = counts.get(t, 0) + 1
+
     return {
+        "week_label": label,
         "total_km": round(total_km, 2),
         "total_time_h": round(total_time / 3600.0, 2),
         "sessions": len(acts),
@@ -292,9 +341,13 @@ def get_weekly_details(
     compute_decoupling: bool = False,
     hrmax: Optional[int] = None,
     hrrest: Optional[int] = None,
+    week_start: Optional[str] = None,
+    iso_year: Optional[int] = None,
+    iso_week: Optional[int] = None,
 ) -> Dict[str, Any]:
     type_set = _parse_types_param(types)
-    acts = _fetch_week_activities(access_token, type_set)
+    after_ts, before_ts, label = _week_range_from_params(week_start, iso_year, iso_week)
+    acts = _fetch_activities_in_range(access_token, after_ts, before_ts, type_set)
 
     # zones pour temps en zones
     est_hrmax = hrmax or _estimate_hrmax([_activity_to_brief(a) for a in acts]) or 190
@@ -316,14 +369,12 @@ def get_weekly_details(
             if streams:
                 hr_stream = streams.get("heartrate")
                 vel_stream = streams.get("velocity_smooth")
-                # Pour 'full' seulement, on renvoie les tableaux (downsample)
                 if streams_mode == "full":
                     brief["streams"] = {
                         "heartrate": _downsample(hr_stream, max_points) if hr_stream else None,
                         "velocity_smooth_mps": _downsample(vel_stream, max_points) if vel_stream else None,
                     }
 
-        # Temps en zones (avec streams si dispo et crédibles)
         duration = int(brief.get("moving_time_s") or 0)
         avg_hr = brief.get("avg_heartrate")
         if hr_stream and len(hr_stream) >= max(10, duration // 6):
@@ -332,13 +383,11 @@ def get_weekly_details(
             tiz = _time_in_zones_from_avg(avg_hr, duration, zones)
         brief["time_in_zones_s"] = tiz
 
-        # Découpling si demandé et streams dispo (Run/Ride)
         if compute_decoupling and hr_stream and vel_stream and (brief.get("type") in {"Ride", "VirtualRide", "Run", "TrailRun"}):
             brief["hr_decoupling_percent"] = _hr_decoupling(hr_stream, vel_stream)
 
         details.append(brief)
 
-        # agrégations
         sp = brief["type"]
         g = by_sport.setdefault(
             sp,
@@ -366,6 +415,7 @@ def get_weekly_details(
         del g["avg_hr_sum"], g["avg_hr_n"], g["total_time_s"]
 
     return {
+        "week_label": label,
         "summary": {"total_km": round(sum_km, 2), "total_time_h": round(sum_time / 3600.0, 2), "activities": len(acts)},
         "by_sport": by_sport,
         "activities": details,
@@ -376,7 +426,7 @@ def get_weekly_details(
     }
 
 # -----------------------------
-# Public: weekly analysis (compact)
+# Public: weekly analysis (semaine cible ou courante)
 # -----------------------------
 
 def get_weekly_analysis(
@@ -387,9 +437,13 @@ def get_weekly_analysis(
     hrmax: Optional[int] = None,
     hrrest: Optional[int] = None,
     compute_decoupling: bool = True,
+    week_start: Optional[str] = None,
+    iso_year: Optional[int] = None,
+    iso_week: Optional[int] = None,
 ) -> Dict[str, Any]:
     type_set = _parse_types_param(types)
-    acts_raw = _fetch_week_activities(access_token, type_set)
+    after_ts, before_ts, label = _week_range_from_params(week_start, iso_year, iso_week)
+    acts_raw = _fetch_activities_in_range(access_token, after_ts, before_ts, type_set)
 
     activities: List[Dict[str, Any]] = []
     for a in acts_raw:
@@ -400,9 +454,8 @@ def get_weekly_analysis(
             if streams:
                 hr_stream = streams.get("heartrate")
                 vel_stream = streams.get("velocity_smooth")
-        brief_streams = {"heartrate": hr_stream, "velocity_smooth_mps": vel_stream} if (hr_stream or vel_stream) else None
-        if brief_streams:
-            brief["streams"] = brief_streams
+        if hr_stream or vel_stream:
+            brief["streams"] = {"heartrate": hr_stream, "velocity_smooth_mps": vel_stream}
         activities.append(brief)
 
     use_hrmax = hrmax or _estimate_hrmax(activities) or 190
@@ -456,6 +509,7 @@ def get_weekly_analysis(
         })
 
     weekly_summary = {
+        "week_label": label,
         "sessions": len(analyzed_sessions),
         "total_time_h": round(total_time_s / 3600.0, 2),
         "trimp_total": round(weekly_trimp, 1),
@@ -508,7 +562,84 @@ def get_weekly_analysis(
         "weekly_summary": weekly_summary,
         "recovery": recovery,
         "by_type": by_type,
-        "sessions": analyzed_sessions,   # pas de streams bruts downsamplés ici
+        "sessions": analyzed_sessions,
         "zones_definition": [{"zone": z[0], "min_bpm": z[1], "max_bpm": z[2]} for z in zones],
     }
+
+# -----------------------------
+# Public: weekly history (multi-semaines)
+# -----------------------------
+
+def get_weekly_history(
+    access_token: str,
+    types: str = "all",
+    weeks: int = 8,
+    end_week_start: Optional[str] = None,   # si fourni, la dernière semaine = celle-ci
+    iso_year: Optional[int] = None,
+    iso_week: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Renvoie des résumés compacts par semaine (sans streams):
+      - pour initialiser la mémoire du GPT
+      - weeks=8 par défaut
+    """
+    type_set = _parse_types_param(types)
+
+    # Déterminer la dernière semaine (fin de fenêtre)
+    if end_week_start or (iso_year and iso_week):
+        after_ts_end, before_ts_end, label_end = _week_range_from_params(end_week_start, iso_year, iso_week)
+        # on part du lundi de cette semaine
+        end_week_monday = datetime.fromtimestamp(after_ts_end, tz=timezone.utc).date()
+    else:
+        local_today = _utc_now().astimezone().date()
+        end_week_monday = local_today - timedelta(days=(local_today.isoweekday() - 1))
+
+    results: List[Dict[str, Any]] = []
+
+    for i in range(weeks):
+        # semaine = end_week_monday - i semaines
+        start_i = end_week_monday - timedelta(weeks=i)
+        end_i = start_i + timedelta(days=7) - timedelta(seconds=1)
+
+        start_dt = datetime(start_i.year, start_i.month, start_i.day, 0, 0, 0, tzinfo=timezone.utc)
+        end_dt = datetime(end_i.year, end_i.month, end_i.day, 23, 59, 59, tzinfo=timezone.utc)
+        after_ts = int(start_dt.timestamp())
+        before_ts = int(end_dt.timestamp())
+        label = f"{start_i.isoformat()}..{end_i.isoformat()}"
+
+        acts = _fetch_activities_in_range(access_token, after_ts, before_ts, type_set)
+
+        total_km, total_time = 0.0, 0
+        counts: Dict[str, int] = {}
+        trimp_total = 0.0
+
+        # HRmax hebdo pour TRIMP approx (sans streams)
+        hrmax_est = _estimate_hrmax([_activity_to_brief(a) for a in acts]) or 190
+
+        for a in acts:
+            brief = _activity_to_brief(a)
+            total_km += brief["distance_km"]
+            total_time += int(brief["moving_time_s"])
+            t = brief.get("type", "Other")
+            counts[t] = counts.get(t, 0) + 1
+            # TRIMP simple via HR moy (si dispo)
+            trimp_total += _trimp_banister(int(brief["moving_time_s"]), float(brief.get("avg_heartrate") or 0.0), hrmax_est)
+
+        results.append({
+            "week_label": label,
+            "sessions": len(acts),
+            "total_km": round(total_km, 2),
+            "total_time_h": round(total_time / 3600.0, 2),
+            "counts_by_type": counts,
+            "trimp_total": round(trimp_total, 1),
+        })
+
+    # tri du plus ancien au plus récent
+    results = list(reversed(results))
+    return {
+        "weeks": weeks,
+        "types": list(type_set),
+        "history": results,
+    }
+
 
