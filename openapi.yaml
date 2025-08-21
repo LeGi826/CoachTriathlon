@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Coach Triathlon API
-  description: API pour exposer et analyser les données d'entraînement Strava (hebdo).
-  version: 1.3.0
+  description: API pour exposer et analyser les données d'entraînement Strava (hebdo), avec sélection de semaine (date/ISO) et historique multi-semaines.
+  version: 1.4.0
 servers:
   - url: https://coachtriathlon.onrender.com
 
@@ -42,6 +42,21 @@ paths:
           required: false
           schema: { type: string, default: all }
           description: "all ou liste CSV (ex: 'Ride,Run,Swim,Workout,WeightTraining')."
+        - in: query
+          name: week_start
+          required: false
+          schema: { type: string, example: "2025-08-11" }
+          description: Lundi de la semaine au format YYYY-MM-DD (prioritaire si fourni).
+        - in: query
+          name: iso_year
+          required: false
+          schema: { type: integer, example: 2025 }
+          description: Année ISO de la semaine cible (utilisée avec iso_week).
+        - in: query
+          name: iso_week
+          required: false
+          schema: { type: integer, example: 33 }
+          description: Numéro ISO de la semaine cible (1..53).
       responses:
         "200":
           description: Données récupérées avec succès
@@ -79,7 +94,7 @@ paths:
           schema:
             type: string
             enum: [none, summary, full]
-            default: summary
+            default: none
           description: |
             Contrôle l'usage/retour des séries :
               - none    : pas de séries
@@ -105,6 +120,21 @@ paths:
           required: false
           schema: { type: integer, minimum: 30, maximum: 120 }
           description: FC repos (bpm) — utile si tu forces un modèle Karvonen côté client (ici zones = percent_max).
+        - in: query
+          name: week_start
+          required: false
+          schema: { type: string, example: "2025-08-11" }
+          description: Lundi de la semaine au format YYYY-MM-DD (prioritaire si fourni).
+        - in: query
+          name: iso_year
+          required: false
+          schema: { type: integer, example: 2025 }
+          description: Année ISO de la semaine cible (utilisée avec iso_week).
+        - in: query
+          name: iso_week
+          required: false
+          schema: { type: integer, example: 33 }
+          description: Numéro ISO de la semaine cible (1..53).
       responses:
         "200":
           description: Données récupérées avec succès
@@ -139,7 +169,7 @@ paths:
         - in: query
           name: with_streams
           required: false
-          schema: { type: boolean, default: false }
+          schema: { type: boolean, default: true }
           description: Utiliser les streams HR/vitesse pour calculer zones/decoupling côté serveur
         - in: query
           name: zone_model
@@ -161,6 +191,21 @@ paths:
           required: false
           schema: { type: boolean, default: true }
           description: Calcule la décorrélation HR (Run/Ride) quand les streams sont disponibles.
+        - in: query
+          name: week_start
+          required: false
+          schema: { type: string, example: "2025-08-11" }
+          description: Lundi de la semaine au format YYYY-MM-DD (prioritaire si fourni).
+        - in: query
+          name: iso_year
+          required: false
+          schema: { type: integer, example: 2025 }
+          description: Année ISO de la semaine cible (utilisée avec iso_week).
+        - in: query
+          name: iso_week
+          required: false
+          schema: { type: integer, example: 33 }
+          description: Numéro ISO de la semaine cible (1..53).
       responses:
         "200":
           description: Analyse calculée avec succès
@@ -168,6 +213,57 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WeeklyAnalysisResponse'
+        "500":
+          description: Erreur interne
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /weekly-history:
+    get:
+      summary: Historique compact multi-semaines (sans streams) pour initialiser la mémoire
+      operationId: getWeeklyHistory
+      parameters:
+        - in: query
+          name: access_token
+          required: false
+          schema: { type: string }
+          description: >
+            Strava OAuth access_token.
+            Si omis, le serveur tentera un rafraîchissement via STRAVA_*.
+        - in: query
+          name: types
+          required: false
+          schema: { type: string, default: all }
+          description: "all ou liste CSV (ex: 'Ride,Run,Swim,Workout,WeightTraining')."
+        - in: query
+          name: weeks
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 26, default: 8 }
+          description: Nombre de semaines à remonter (par défaut 8, max 26).
+        - in: query
+          name: end_week_start
+          required: false
+          schema: { type: string, example: "2025-08-11" }
+          description: Lundi (YYYY-MM-DD) de la DERNIÈRE semaine de la fenêtre.
+        - in: query
+          name: iso_year
+          required: false
+          schema: { type: integer, example: 2025 }
+          description: Année ISO de la DERNIÈRE semaine (utilisée avec iso_week).
+        - in: query
+          name: iso_week
+          required: false
+          schema: { type: integer, example: 33 }
+          description: Numéro ISO de la DERNIÈRE semaine (1..53).
+      responses:
+        "200":
+          description: Historique récupéré avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WeeklyHistoryResponse'
         "500":
           description: Erreur interne
           content:
@@ -187,9 +283,10 @@ components:
     WeeklyStatsResponse:
       type: object
       properties:
-        total_km: { type: number, example: 42.5 }
-        total_time_h: { type: number, example: 3.75 }
-        sessions: { type: integer, example: 6 }
+        week_label: { type: string, example: "2025-08-11..2025-08-17" }
+        total_km: { type: number, example: 117.45 }
+        total_time_h: { type: number, example: 6.88 }
+        sessions: { type: integer, example: 11 }
         counts_by_type:
           type: object
           additionalProperties: { type: integer }
@@ -247,6 +344,9 @@ components:
     WeeklyDetailsResponse:
       type: object
       properties:
+        week_label:
+          type: string
+          example: "2025-08-11..2025-08-17"
         summary:
           type: object
           properties:
@@ -311,6 +411,7 @@ components:
         weekly_summary:
           type: object
           properties:
+            week_label: { type: string, example: "2025-08-11..2025-08-17" }
             sessions: { type: integer }
             total_time_h: { type: number }
             trimp_total: { type: number, description: "Somme des TRIMP (Banister)" }
@@ -355,3 +456,28 @@ components:
               zone: { type: string, example: Z3 }
               min_bpm: { type: integer }
               max_bpm: { type: integer, nullable: true }
+
+    WeeklyHistoryItem:
+      type: object
+      properties:
+        week_label: { type: string, example: "2025-06-23..2025-06-29" }
+        sessions: { type: integer, example: 9 }
+        total_km: { type: number, example: 112.4 }
+        total_time_h: { type: number, example: 6.2 }
+        counts_by_type:
+          type: object
+          additionalProperties: { type: integer }
+        trimp_total: { type: number, example: 780.5 }
+
+    WeeklyHistoryResponse:
+      type: object
+      properties:
+        weeks: { type: integer, example: 8 }
+        types:
+          type: array
+          items: { type: string }
+        history:
+          type: array
+          description: Du plus ancien vers le plus récent.
+          items:
+            $ref: '#/components/schemas/WeeklyHistoryItem'
